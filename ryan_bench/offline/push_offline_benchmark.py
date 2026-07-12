@@ -1,11 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Benchmark against insufficient_gpu_buffer_benchmark.py.
-In this benchmark, we will use push-based KV transfer.
-Prefill worker immediately sends KV caches to decode worker's buffer,
-allowing prefill worker to exit after completing all requests.
+PUSH-based offline disaggregated-prefill benchmark.
+
+Run this on the `push_mode` / `hybridserve` branches. The prefill worker
+immediately PUSHES KV caches to the decode worker's buffer, so it can exit right
+after finishing its requests -- so this deadlocks against the pull baseline. Use
+pull_offline_benchmark.py on the `pull_mode` branch instead.
+
+Adds QPS rate-limiting, per-request latency tracking, and event-based
+coordination for a clean shutdown.
+
+Tunable parameters are the module-level constants below (NUM_PROMPTS, QPS, ...).
 """
 import os
+# NCCL settings for the prefill<->decode KV transfer on GPUs without NVLink
+# (e.g. V100 PCIe). Set before vLLM/NCCL import. Override by exporting your own
+# values (e.g. NCCL_P2P_DISABLE=0 on NVLink boxes).
+os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+os.environ.setdefault("NCCL_IB_DISABLE", "1")
+os.environ.setdefault("NCCL_NET_GDR_LEVEL", "0")
+
 import logging
 import random
 import time
@@ -27,7 +41,7 @@ NUM_PROMPTS = 10
 PROMPT_LENGTH = 128  # target character length
 OUTPUT_LEN = 128
 BUFFER_SIZE = 8930*(256+5)
-QPS = 6.0  # Queries per second (0 = no rate limiting, send as fast as possible)
+QPS = 2.0  # Queries per second (0 = no rate limiting, send as fast as possible)
 
 # Simple word list for generating prompts
 WORDS = ["the", "cat", "dog", "tree", "house", "car", "sun", "moon", "water", 
