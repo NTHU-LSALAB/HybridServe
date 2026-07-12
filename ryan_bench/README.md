@@ -20,9 +20,10 @@ the branch**:
 | `push_mode`   | push            | `offline/push_offline_benchmark.py` |
 | `hybridserve` | push (CPU-staged) | `offline/push_offline_benchmark.py` |
 
-Both scripts are byte-identical on every branch (so the harness is uniform), but
-a **push** client deadlocks against a **pull** engine and vice-versa — pick the
-row above. Both set `NCCL_P2P_DISABLE=1` internally so they work on GPUs without
+**Each branch ships only the offline script it can run** (the one in its row
+above): a **push** client deadlocks against a **pull** engine and vice-versa, so
+the incompatible script is not included. Both scripts are documented below for
+reference. They set `NCCL_P2P_DISABLE=1` internally so they work on GPUs without
 NVLink (e.g. V100 PCIe); export `NCCL_P2P_DISABLE=0` to override on NVLink boxes.
 
 ## Offline benchmarks

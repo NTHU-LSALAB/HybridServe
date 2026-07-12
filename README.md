@@ -62,8 +62,8 @@ python -c "import vllm; print(vllm.__version__)"   # -> 0.8.3+...
 All benchmarks live in [`ryan_bench/`](ryan_bench/) — see
 [`ryan_bench/README.md`](ryan_bench/README.md) for full details. Quick start:
 
-The offline scripts are identical on all branches, but **run the one matching
-the branch's engine** (a push client deadlocks on the pull engine, and vice-versa):
+Each branch ships **only the offline script its engine can run** (a push client
+deadlocks on the pull engine, and vice-versa):
 
 ```bash
 # On pull_mode:
