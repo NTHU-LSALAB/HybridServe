@@ -77,6 +77,13 @@ class SimpleBuffer(KVLookupBufferBase):
         self.vram_used_by_buffer = 0  # Track VRAM used by our stored tensors
         self._device_available = torch.cuda.is_available()
         
+        # Pre-allocate pinned buffer pool at initialization to avoid repeated pinning overhead
+        # Use a simple free list to manage reusable pinned buffers
+        self.pinned_buffer_pool: Deque[torch.Tensor] = deque()
+        self.pinned_pool_lock = threading.Lock()
+        # Pre-allocate some common-sized pinned buffers (will grow as needed)
+        self._preallocate_pinned_buffers()
+        
         # Start threads at initialization to avoid cold start based on role
         if role == 'consumer':
             # Consumer only needs receiver handler
@@ -92,6 +99,40 @@ class SimpleBuffer(KVLookupBufferBase):
         else:
             raise ValueError(f"Invalid role: {role}. Must be 'producer', 'consumer', or None")
 
+    def _preallocate_pinned_buffers(self):
+        """Pre-allocate a pool of pinned buffers to avoid repeated pinning overhead"""
+        # Start with a modest pool - it will grow dynamically as needed
+        # These are just placeholder buffers; actual sizes will be allocated on-demand
+        logger.debug("Pre-allocated pinned buffer pool initialized (dynamic sizing)")
+    
+    def _get_pinned_buffer(self, shape, dtype, layout=torch.strided):
+        """Get a pinned buffer from pool or allocate new one"""
+        required_size = torch.empty(shape, dtype=dtype).element_size() * torch.empty(shape, dtype=dtype).numel()
+        
+        with self.pinned_pool_lock:
+            # Try to find a reusable buffer with matching size and dtype
+            for i, buf in enumerate(self.pinned_buffer_pool):
+                buf_size = buf.element_size() * buf.numel()
+                if buf.dtype == dtype and buf_size >= required_size:
+                    # Reuse this buffer
+                    reused_buf = self.pinned_buffer_pool[i]
+                    del self.pinned_buffer_pool[i]
+                    # Reshape if needed
+                    if reused_buf.shape != shape:
+                        return reused_buf.view(-1)[:required_size // reused_buf.element_size()].view(shape)
+                    return reused_buf
+        
+        # No suitable buffer found, allocate a new pinned buffer
+        return torch.empty(shape, dtype=dtype, layout=layout, device='cpu', pin_memory=True)
+    
+    def _return_pinned_buffer(self, buf: torch.Tensor):
+        """Return a pinned buffer to the pool for reuse"""
+        if buf.is_pinned():
+            with self.pinned_pool_lock:
+                # Limit pool size to avoid excessive memory usage
+                if len(self.pinned_buffer_pool) < 100:  # Keep at most 100 buffers
+                    self.pinned_buffer_pool.append(buf)
+    
     def _matches(self, tokens_roi_sender: List[torch.Tensor],
                  tokens_roi_recver: List[torch.Tensor]):
 
@@ -115,9 +156,9 @@ class SimpleBuffer(KVLookupBufferBase):
 
         # Handle device mismatches - move CPU tensor to GPU for comparison
         if tokens_sender.device.type == "cpu" and tokens_recver.device.type == "cuda":
-            tokens_sender = tokens_sender.cuda()
+            tokens_sender = tokens_sender.cuda(non_blocking=True)
         elif tokens_sender.device.type == "cuda" and tokens_recver.device.type == "cpu":
-            tokens_recver = tokens_recver.cuda()
+            tokens_recver = tokens_recver.cuda(non_blocking=True)
 
         # simple common prefix matching
         min_length = min(len(tokens_sender), len(tokens_recver))
@@ -177,11 +218,23 @@ class SimpleBuffer(KVLookupBufferBase):
         use_gpu_storage = self._should_use_gpu_storage(data_size)
         target_device = "cuda" if use_gpu_storage else "cpu"
         
-        # Clone tensors to target device (optimized: single loop)
+        # Clone tensors to target device with optimizations
         buffer_item = []
         for tensor in buffer_item_temp:
             if isinstance(tensor, torch.Tensor):
-                buffer_item.append(tensor.clone().to(target_device))
+                if target_device == "cpu":
+                    # Get pinned buffer from pre-allocated pool (zero overhead after warmup)
+                    pinned_tensor = self._get_pinned_buffer(
+                        tensor.shape, 
+                        tensor.dtype,
+                        tensor.layout
+                    )
+                    # Non-blocking copy to pinned memory
+                    pinned_tensor.copy_(tensor, non_blocking=True)
+                    buffer_item.append(pinned_tensor)
+                else:
+                    # Move to GPU with non-blocking transfer
+                    buffer_item.append(tensor.to(target_device, non_blocking=True))
             else:
                 buffer_item.append(tensor)
         
@@ -368,7 +421,10 @@ class SimpleBuffer(KVLookupBufferBase):
                         moved_item.append(item)  # Already on GPU, just use as-is
                     else:
                         # Move from CPU to GPU for processing (non-blocking for better perf)
-                        moved_item.append(item.cuda(non_blocking=True))
+                        gpu_item = item.cuda(non_blocking=True)
+                        moved_item.append(gpu_item)
+                        # Return the pinned CPU buffer to pool for reuse
+                        self._return_pinned_buffer(item)
                 else:
                     moved_item.append(None)
             
@@ -457,6 +513,11 @@ class SimpleBuffer(KVLookupBufferBase):
             self.buffer_size = 0
             self.vram_used_by_buffer = 0
             logger.debug("Cleared buffer and reset VRAM tracking")
+        
+        # Clear pinned buffer pool
+        with self.pinned_pool_lock:
+            self.pinned_buffer_pool.clear()
+            logger.debug("Cleared pinned buffer pool")
             
         # If this is a producer, signal end to consumer
         # if not self.is_consumer:

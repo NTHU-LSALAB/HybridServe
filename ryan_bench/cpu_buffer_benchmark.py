@@ -4,6 +4,7 @@ Benchmark against insufficient_gpu_buffer_benchmark.py.
 In this benchmark, we will use cpu as buffer device.
 Will create a sufficient large buffer size.
 """
+
 import os
 import time
 from multiprocessing import Event, Process
@@ -15,12 +16,13 @@ from vllm.config import KVTransferConfig
 
 
 prompts = [
-        "The cat sat on mat",
-        "Five dogs ran past me", 
-        "She walked through the door",
-        "He jumped over the fence",
-        "They danced in the rain",
-    ]
+    "The cat sat on mat",
+    "Five dogs ran past me",
+    "She walked through the door",
+    "He jumped over the fence",
+    "They danced in the rain",
+]
+
 
 def run_prefill():
     # We use GPU 0 for prefill node.
@@ -30,7 +32,7 @@ def run_prefill():
     # three requests. So the decode node will only receive the KV Cache for
     # requests 1 and 3. The decode node will use the KV Cache of requests 1
     # and 3 and do prefilling on request 2.
-    
+
     sampling_params = SamplingParams(temperature=0, top_p=0.95, max_tokens=1)
 
     # Using PyNcclConnector to transmit KV caches between vLLM instances.
@@ -42,22 +44,25 @@ def run_prefill():
         kv_role="kv_producer",
         kv_rank=0,
         kv_parallel_size=2,
-        kv_buffer_device="cpu"
+        kv_buffer_device="cpu",
     )
 
-    # Set GPU memory utilization to 0.8 for an A6000 GPU with 40GB
-    # memory. You may need to adjust the value to fit your GPU.
-    llm = LLM(model="Qwen/Qwen2.5-1.5B-Instruct",
-              kv_transfer_config=ktc,
-              max_model_len=2000,
-              dtype="half",
-              gpu_memory_utilization=0.8)
+    llm = LLM(
+        model="mistralai/Mistral-7B-Instruct-v0.2",
+        kv_transfer_config=ktc,
+        max_model_len=200,
+        dtype="half",
+        gpu_memory_utilization=0.95,
+        enforce_eager=True,
+    )
 
     for i, prompt_text in enumerate(prompts):
         torch.cuda.nvtx.range_push(f"prefill {i}")
-        llm.generate([prompt_text], sampling_params) # Pass a list with a single prompt
+        llm.generate(
+            [prompt_text], sampling_params
+        )  # Pass a list with a single prompt
         torch.cuda.nvtx.range_pop()
-    
+
     print("Prefill node is finished with all prompts.")
 
     # To keep the prefill node running in case the decode node is not done;
@@ -73,7 +78,9 @@ def run_decode():
     # We use GPU 1 for decode node.
     os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
-    sampling_params = SamplingParams(temperature=0, top_p=0.95, min_tokens=90, max_tokens=100)
+    sampling_params = SamplingParams(
+        temperature=0, top_p=0.95, min_tokens=90, max_tokens=100
+    )
 
     # Using PyNcclConnector to transmit KV caches between vLLM instances.
     # This instance is the decode node (kv_consumer, rank 1).
@@ -84,27 +91,28 @@ def run_decode():
         kv_role="kv_consumer",
         kv_rank=1,
         kv_parallel_size=2,
-        kv_buffer_device="cpu"
+        kv_buffer_device="cpu",
     )
-    # Set GPU memory utilization to 0.8 for an A6000 GPU with 40GB
-    # memory. You may need to adjust the value to fit your GPU.
-    llm = LLM(model="Qwen/Qwen2.5-1.5B-Instruct",
-              kv_transfer_config=ktc,
-              max_model_len=2000,
-              dtype= "half",
-              gpu_memory_utilization=0.8)
+    llm = LLM(
+        model="mistralai/Mistral-7B-Instruct-v0.2",
+        kv_transfer_config=ktc,
+        max_model_len=200,
+        dtype="half",
+        gpu_memory_utilization=0.95,
+        enforce_eager=True,
+    )
 
     all_outputs = []
     for i, prompt_text in enumerate(prompts):
-
         # At this point the kv-cache for this specific prompt should have been transferred
         # (as part of the overall KV cache transfer completed by the prefill node).
         torch.cuda.nvtx.range_push(f"decode {i}")
-        outputs = llm.generate([prompt_text], sampling_params) # Pass a list with a single prompt
+        outputs = llm.generate(
+            [prompt_text], sampling_params
+        )  # Pass a list with a single prompt
         torch.cuda.nvtx.range_pop()
 
         all_outputs.extend(outputs)
-
 
     print("\n--- Decode Node: Final Outputs ---")
     for output in all_outputs:
@@ -122,7 +130,6 @@ if __name__ == "__main__":
     decode_process.start()
 
     # Start decode node
-
 
     # Terminate the prefill node when decode is finished
     decode_process.join()
