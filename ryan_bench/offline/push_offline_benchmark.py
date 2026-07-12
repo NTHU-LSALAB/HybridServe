@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Benchmark against insufficient_gpu_buffer_benchmark.py.
-In this benchmark, we will use push-based KV transfer.
-Prefill worker immediately sends KV caches to decode worker's buffer,
-allowing prefill worker to exit after completing all requests.
+Push-based offline disaggregated-prefill benchmark (push_mode / hybridserve).
+
+Unlike disagg_offline_benchmark.py (pull-based), the prefill worker immediately
+pushes KV caches to the decode worker's buffer, so the prefill worker can exit
+right after finishing its requests. Adds QPS rate-limiting, per-request latency
+tracking, and event-based coordination for a clean shutdown.
+
+Tunable parameters are the module-level constants below (NUM_PROMPTS, QPS, ...).
 """
 import os
 import logging
