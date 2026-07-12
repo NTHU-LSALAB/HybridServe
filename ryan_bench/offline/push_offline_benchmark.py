@@ -1,15 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Push-based offline disaggregated-prefill benchmark (push_mode / hybridserve).
+PUSH-based offline disaggregated-prefill benchmark.
 
-Unlike disagg_offline_benchmark.py (pull-based), the prefill worker immediately
-pushes KV caches to the decode worker's buffer, so the prefill worker can exit
-right after finishing its requests. Adds QPS rate-limiting, per-request latency
-tracking, and event-based coordination for a clean shutdown.
+Run this on the `push_mode` / `hybridserve` branches. The prefill worker
+immediately PUSHES KV caches to the decode worker's buffer, so it can exit right
+after finishing its requests -- so this deadlocks against the pull baseline. Use
+pull_offline_benchmark.py on the `pull_mode` branch instead.
+
+Adds QPS rate-limiting, per-request latency tracking, and event-based
+coordination for a clean shutdown.
 
 Tunable parameters are the module-level constants below (NUM_PROMPTS, QPS, ...).
 """
 import os
+# NCCL settings for the prefill<->decode KV transfer on GPUs without NVLink
+# (e.g. V100 PCIe). Set before vLLM/NCCL import. Override by exporting your own
+# values (e.g. NCCL_P2P_DISABLE=0 on NVLink boxes).
+os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+os.environ.setdefault("NCCL_IB_DISABLE", "1")
+os.environ.setdefault("NCCL_NET_GDR_LEVEL", "0")
+
 import logging
 import random
 import time

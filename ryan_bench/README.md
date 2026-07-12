@@ -9,28 +9,40 @@ families:
 - **`online/`** — an OpenAI-compatible serving setup (two API servers + a proxy)
   plus a load generator, for end-to-end TTFT / throughput measurements.
 
-The KV-transfer *mode* (pull / push / hybridserve) is determined by which
-**branch** of this repo you build vLLM from — see the top-level
-[README](../README.md). The scripts here are the same across modes; the engine
-underneath differs.
+The KV-transfer *mode* is determined by which **branch** of this repo you build
+vLLM from — see the top-level [README](../README.md). The engine's transfer
+protocol differs per branch, so **you must run the offline script that matches
+the branch**:
+
+| Branch        | Engine protocol | Offline script to run          |
+|---------------|-----------------|--------------------------------|
+| `pull_mode`   | pull            | `offline/pull_offline_benchmark.py` |
+| `push_mode`   | push            | `offline/push_offline_benchmark.py` |
+| `hybridserve` | push (CPU-staged) | `offline/push_offline_benchmark.py` |
+
+Both scripts are byte-identical on every branch (so the harness is uniform), but
+a **push** client deadlocks against a **pull** engine and vice-versa — pick the
+row above. Both set `NCCL_P2P_DISABLE=1` internally so they work on GPUs without
+NVLink (e.g. V100 PCIe); export `NCCL_P2P_DISABLE=0` to override on NVLink boxes.
 
 ## Offline benchmarks
 
-### `offline/disagg_offline_benchmark.py`
-Pull-based disaggregated prefill. Replaces the old `gpu_buffer_benchmark`,
-`insufficient_buffer_benchmark`, and `cpu_buffer_benchmark` scripts, which only
-differed in the KV buffer device/size and model — now CLI flags:
+### `offline/pull_offline_benchmark.py`  (run on `pull_mode`)
+Pull-based disaggregated prefill: the prefill node stays alive and the decode
+node pulls the KV cache on demand. Consolidates the old `gpu_buffer_benchmark`,
+`insufficient_buffer_benchmark`, and `cpu_buffer_benchmark` scripts (they only
+differed in KV buffer device/size and model) into CLI flags:
 
 ```bash
 # GPU buffer, sufficient size (default)
-python offline/disagg_offline_benchmark.py
+python offline/pull_offline_benchmark.py
 
 # GPU buffer, deliberately too small -> prefill blocks.
 # (Add nvtx ranges in simple_buffer.py to observe the wait time.)
-python offline/disagg_offline_benchmark.py --kv-buffer-size 160000
+python offline/pull_offline_benchmark.py --kv-buffer-size 160000
 
-# CPU buffer (hybridserve staging device)
-python offline/disagg_offline_benchmark.py \
+# CPU buffer
+python offline/pull_offline_benchmark.py \
     --buffer-device cpu \
     --model mistralai/Mistral-7B-Instruct-v0.2 \
     --max-model-len 200 --gpu-memory-utilization 0.95 --enforce-eager
@@ -38,11 +50,11 @@ python offline/disagg_offline_benchmark.py \
 
 Run `--help` for all flags (model, GPUs, output length, ...).
 
-### `offline/push_offline_benchmark.py`
-Push-based transfer (`push_mode` / `hybridserve`): the prefill worker pushes KV
-caches to the decode worker immediately and exits early. Adds QPS rate-limiting,
-per-request latency tracking, and event-based shutdown. Tune the module-level
-constants at the top of the file (`NUM_PROMPTS`, `QPS`, `BUFFER_SIZE`, ...), then:
+### `offline/push_offline_benchmark.py`  (run on `push_mode` / `hybridserve`)
+Push-based transfer: the prefill worker pushes KV caches to the decode worker
+immediately and exits early. Adds QPS rate-limiting, per-request latency
+tracking, and event-based shutdown. Tune the module-level constants at the top
+of the file (`NUM_PROMPTS`, `QPS`, `BUFFER_SIZE`, ...), then:
 
 ```bash
 python offline/push_offline_benchmark.py

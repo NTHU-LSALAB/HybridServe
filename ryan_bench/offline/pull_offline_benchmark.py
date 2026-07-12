@@ -1,24 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Offline disaggregated-prefill benchmark.
+PULL-based offline disaggregated-prefill benchmark.
+
+Run this on the `pull_mode` branch (baseline vLLM). The prefill node stays alive
+after producing the KV cache and the decode node PULLS it on demand -- so this
+script deadlocks against a push engine. Use push_offline_benchmark.py on the
+`push_mode` / `hybridserve` branches instead.
 
 Launches two single-GPU vLLM instances in separate processes:
   * a prefill node   (kv_producer, GPU 0) that runs prompts with max_tokens=1
-  * a decode  node   (kv_consumer, GPU 1) that receives the KV cache and decodes
+  * a decode  node   (kv_consumer, GPU 1) that pulls the KV cache and decodes
 
-This single script replaces the old gpu_buffer / insufficient_buffer /
-cpu_buffer benchmarks -- they only differed in the KV buffer device/size and
-the model. Select the scenario with CLI flags:
+Consolidates the old gpu_buffer / insufficient_buffer / cpu_buffer benchmarks --
+they only differed in the KV buffer device/size and the model. Select via flags:
 
   # GPU buffer, sufficient size (default)
-  python disagg_offline_benchmark.py
+  python pull_offline_benchmark.py
 
-  # GPU buffer, deliberately too small -> prefill blocks (pull_mode demo).
+  # GPU buffer, deliberately too small -> prefill blocks (insufficient-buffer demo).
   # Add nvtx ranges in simple_buffer.py to observe the wait time.
-  python disagg_offline_benchmark.py --kv-buffer-size 160000
+  python pull_offline_benchmark.py --kv-buffer-size 160000
 
-  # CPU buffer (hybridserve mode)
-  python disagg_offline_benchmark.py \
+  # CPU buffer
+  python pull_offline_benchmark.py \
       --buffer-device cpu \
       --model mistralai/Mistral-7B-Instruct-v0.2 \
       --max-model-len 200 --gpu-memory-utilization 0.95 --enforce-eager
@@ -26,6 +30,13 @@ the model. Select the scenario with CLI flags:
 
 import argparse
 import os
+# These NCCL settings let the prefill<->decode KV transfer work on GPUs without
+# NVLink (e.g. V100 PCIe). Set before vLLM/NCCL import. Override by exporting
+# your own values (e.g. NCCL_P2P_DISABLE=0 on NVLink boxes).
+os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+os.environ.setdefault("NCCL_IB_DISABLE", "1")
+os.environ.setdefault("NCCL_NET_GDR_LEVEL", "0")
+
 import time
 from multiprocessing import Process
 

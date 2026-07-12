@@ -30,7 +30,7 @@ from it, then run the benchmarks below.
 
 ## Environment setup
 
-The reference environment is Python 3.10 + CUDA 12.1 + PyTorch 2.5.1, captured in
+The reference environment is Python 3.10 + CUDA 12.4 + PyTorch 2.6.0, captured in
 [`environment.yml`](environment.yml).
 
 ```bash
@@ -48,7 +48,7 @@ Notes:
 - `environment.yml` pins exact versions from the working `vllm_env`. The `vllm`
   line is intentionally commented out there — vLLM is installed from source in
   step 2, not from PyPI.
-- PyTorch CUDA 12.1 wheels are pulled from the pytorch index (already wired into
+- PyTorch CUDA 12.4 wheels are pulled from the pytorch index (already wired into
   `environment.yml` via `--extra-index-url`).
 - Two GPUs are needed to run a prefill + decode pair on one machine.
 
@@ -62,11 +62,15 @@ python -c "import vllm; print(vllm.__version__)"   # -> 0.8.3+...
 All benchmarks live in [`ryan_bench/`](ryan_bench/) — see
 [`ryan_bench/README.md`](ryan_bench/README.md) for full details. Quick start:
 
+The offline scripts are identical on all branches, but **run the one matching
+the branch's engine** (a push client deadlocks on the pull engine, and vice-versa):
+
 ```bash
-# Offline (spawns prefill on GPU 0 + decode on GPU 1 in one command)
-python ryan_bench/offline/disagg_offline_benchmark.py            # pull, GPU buffer
-python ryan_bench/offline/disagg_offline_benchmark.py --buffer-device cpu   # CPU staging
-python ryan_bench/offline/push_offline_benchmark.py             # push, with QPS + latency
+# On pull_mode:
+python ryan_bench/offline/pull_offline_benchmark.py
+
+# On push_mode / hybridserve:
+python ryan_bench/offline/push_offline_benchmark.py
 
 # Online (OpenAI-compatible serving; run each in its own shell)
 ./ryan_bench/online/prefill.sh
@@ -75,8 +79,11 @@ python ryan_bench/online/proxy_server.py
 ./ryan_bench/online/benchmark_serving.sh
 ```
 
+Both offline scripts set `NCCL_P2P_DISABLE=1` internally (needed on GPUs without
+NVLink, e.g. V100 PCIe); export `NCCL_P2P_DISABLE=0` to override.
+
 To compare modes, check out a different branch, rebuild vLLM
-(`VLLM_USE_PRECOMPILED=1 pip install -e .`), and re-run the same benchmark.
+(`VLLM_USE_PRECOMPILED=1 pip install -e .`), and run its matching benchmark.
 
 ## Repository layout
 
